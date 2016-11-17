@@ -1,0 +1,4 @@
+*~
+*.o
+BamManipulator
+version.cpp
