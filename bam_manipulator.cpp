@@ -1,3 +1,4 @@
+
 #include <getopt.h>
 
 #include <cstdlib>
@@ -23,15 +24,16 @@ void print_usage(){
   std::cerr << "Usage: BamManipulator --bam <bam_file>" << "\n" << "\n"
 
 	    << "Required parameters:" << "\n"
-	    << "\t" << "--bam     <bam_file>       "  << "\t" << "BAM file path"                              << "\n"
+	    << "\t" << "--bam     <input_bam_file> "  << "\t" << "Input BAM file path"               << "\n"
+	    << "\t" << "--out     <output_bam_file>"  << "\t" << "Output BAM file path"              << "\n"
 
 	    << "Optional parameters:" << "\n"
-	    << "\t" << "--help                    "  << "\t" << "Print this help message and exit"            << "\n"
-	    << "\t" << "--version                 "  << "\t" << "Print HipSTR version and exit"               << "\n"
+	    << "\t" << "--help                     "  << "\t" << "Print this help message and exit"  << "\n"
+	    << "\t" << "--version                  "  << "\t" << "Print HipSTR version and exit"     << "\n"
 	    << std::endl;
 }
 
-void parse_command_line_args(int argc, char** argv, std::string& bam_file_string){
+void parse_command_line_args(int argc, char** argv, std::string& input_bam_file, std::string& output_bam_file){
   if (argc == 1 || (argc == 2 && std::string("-h").compare(std::string(argv[1])) == 0)){
     print_usage();
     exit(0);
@@ -42,14 +44,15 @@ void parse_command_line_args(int argc, char** argv, std::string& bam_file_string
     {"h",       no_argument, &print_help,    1},
     {"help",    no_argument, &print_help,    1},
     {"version", no_argument, &print_version, 1},
-    {"bams",    required_argument, 0, 'b'},
+    {"bam",     required_argument, 0, 'b'},
+    {"out",     required_argument, 0, 'o'},
     {0, 0, 0, 0}
   };
 
   int c;
   while (true){
     int option_index = 0;
-    c = getopt_long(argc, argv, "b:", long_options, &option_index);
+    c = getopt_long(argc, argv, "b:o:", long_options, &option_index);
     if (c == -1)
       break;
 
@@ -63,7 +66,10 @@ void parse_command_line_args(int argc, char** argv, std::string& bam_file_string
     case 0:
       break;
     case 'b':
-      bam_file_string = std::string(optarg);
+      input_bam_file  = std::string(optarg);
+      break;
+    case 'o':
+      output_bam_file = std::string(optarg);
       break;
     case '?':
       exit(1);
@@ -94,52 +100,43 @@ void parse_command_line_args(int argc, char** argv, std::string& bam_file_string
   }
 }
 
-
-
 int main(int argc, char** argv){
-  std::string bam_file_string = "";
-  parse_command_line_args(argc, argv, bam_file_string);
+  std::string input_bam_file = "", output_bam_file = "";
+  parse_command_line_args(argc, argv, input_bam_file, output_bam_file);
 
-  if (bam_file_string.empty())
+  if (input_bam_file.empty())
     printErrorAndDie("--bam option required");
+  if (output_bam_file.empty())
+    printErrorAndDie("--out option required");
 
   BamTools::BamReader bam_reader;
-  if (!bam_reader.Open(bam_file_string))
-    printErrorAndDie("Failed to the input BAM file");
+  if (!bam_reader.Open(input_bam_file))
+    printErrorAndDie("Failed to open the input BAM file");
 
-  // TO DO: Check that the BAM is sorted by read ID
-
+  BamTools::BamWriter bam_writer;
+  BamTools::RefVector ref_vector = bam_reader.GetReferenceData();
+  if (!bam_writer.Open(output_bam_file, bam_reader.GetHeaderText(), ref_vector))
+    printErrorAndDie("Failed to open the output BAM file");
 
   bam_reader.Rewind();
-  std::vector<BamTools::BamAlignment> alignments;
+  std::set<std::pair<std::string, bool> > processed_ids;
   BamTools::BamAlignment alignment;
   int32_t filt_count = 0, pass_count = 0;
-  std::string prev_id = "";
-  while(bam_reader.GetNextAlignment(alignment)){
-    if (alignment.Name.compare(prev_id) != 0){
-      if (!alignments.empty()){
-	if (alignments.size() == 2){
-	  pass_count += alignments.size();
-	}
-	else
-	  filt_count += alignments.size();
-      }
-
-      alignments.clear();
-      alignments.push_back(alignment);
-      prev_id = alignment.Name;
+  while (bam_reader.GetNextAlignment(alignment)){
+    std::pair<std::string, bool> key(alignment.Name, alignment.IsFirstMate());
+    if (processed_ids.find(key) != processed_ids.end()){
+      filt_count++;
+      continue;
     }
-    else
-      alignments.push_back(alignment);
+    else {
+      pass_count++;
+      bam_writer.SaveAlignment(alignment);
+      processed_ids.insert(key);
+    }
   }
 
-  if (alignments.size() == 2){
-    pass_count += alignments.size();
-  }
-  else
-    filt_count += alignments.size();
-
-  std::cerr << "Filtered out " << filt_count << " out of " << (filt_count+pass_count) << " alignments" << std::endl;
+  std::cerr << "Filtered out " << filt_count << " out of " << (filt_count+pass_count) << " reads due to multiple split alignments" << std::endl;
   bam_reader.Close();
+  bam_writer.Close();
   return 0;
 }
