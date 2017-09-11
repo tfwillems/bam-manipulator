@@ -6,6 +6,7 @@
 #include <set>
 #include <sstream>
 #include <queue>
+#include <unistd.h>
 
 #include "error.h"
 #include "stringops.h"
